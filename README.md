@@ -1,13 +1,36 @@
 RoaringBitmap
 =============
-[![](https://jitpack.io/v/RoaringBitmap/RoaringBitmap.svg)](https://jitpack.io/#RoaringBitmap/RoaringBitmap)
 [![][license img]][license]
 [![docs-badge][]][docs]
-![Java 8 CI](https://github.com/RoaringBitmap/RoaringBitmap/workflows/Java%208%20CI/badge.svg)
 ![Java 11 CI](https://github.com/RoaringBitmap/RoaringBitmap/workflows/Java%2011%20CI/badge.svg)
-![Java 12 CI](https://github.com/RoaringBitmap/RoaringBitmap/workflows/Java%2012%20CI/badge.svg)
-![Java 13 CI](https://github.com/RoaringBitmap/RoaringBitmap/workflows/Java%2013%20CI/badge.svg)
-![Java 14 CI](https://github.com/RoaringBitmap/RoaringBitmap/workflows/Java%2014%20CI/badge.svg)
+
+- [Introduction](#introduction)
+- [When should you use a bitmap?](#when-should-you-use-a-bitmap)
+- [When should you use compressed bitmaps?](#when-should-you-use-compressed-bitmaps)
+- [How does Roaring compare with the alternatives?](#how-does-roaring-compare-with-the-alternatives)
+- [Code sample](#code-sample)
+- [API docs](#api-docs)
+- [Download](#download)
+- [Usage within a Maven project](#usage-within-a-maven-project)
+- [Usage within a gradle project](#usage-within-a-gradle-project)
+- [Scientific Documentation](#scientific-documentation)
+- [Unsigned integers](#unsigned-integers)
+- [Working with memory-mapped bitmaps](#working-with-memory-mapped-bitmaps)
+- [Thread safety](#thread-safety)
+- [Kryo](#kryo)
+- [64-bit integers (long)](#64-bit-integers-long)
+- [Range Bitmaps](#range-bitmaps)
+- [Prerequisites](#prerequisites)
+- [Usage for RoaringBitmap Developers](#usage-for-roaringbitmap-developers)
+- [IntelliJ and Eclipse](#intellij-and-eclipse)
+- [Contributing](#contributing)
+- [FAQ](#faq)
+- [Benchmark](#benchmark)
+- [Mailing list/discussion group](#mailing-listdiscussion-group)
+- [Funding](#funding)
+
+Introduction
+-------------
 
 Bitsets, also called bitmaps, are commonly used as fast data structures.
 Unfortunately, they can use too much memory. To compensate, we often use
@@ -37,12 +60,17 @@ This library is used by
 *   [Tablesaw](https://github.com/jtablesaw/tablesaw),
 *   [Apache Hivemall](http://hivemall.incubator.apache.org),
 *   [Gaffer](https://github.com/gchq/Gaffer),
-*   [Apache Pinot](https://pinot.apache.org/) and
-*   [Apache Druid](https://druid.apache.org/).
+*   [Apache Pinot](https://pinot.apache.org/),
+*   [Apache Druid](https://druid.apache.org/),
+*   [SirixDB](https://sirix.io)
+*   [EvitaDB](https://evitadb.io/)
+*   [Apache Iceberg](https://iceberg.apache.org/)
+*   [Apache Pulsar](https://pulsar.apache.org/)
 
+The library is mature and has been used in production for many years.
 
 The YouTube SQL Engine, [Google Procella](https://research.google/pubs/pub48388/), uses Roaring bitmaps for indexing. [Apache Lucene](http://lucene.apache.org/) uses  Roaring bitmaps, though they have their own [independent implementation](https://svn.apache.org/viewvc/lucene/dev/branches/branch_5x/lucene/core/src/java/org/apache/lucene/util/RoaringDocIdSet.java?view=markup&pathrev=1629606). Derivatives of Lucene such as Solr and Elastic also use Roaring bitmaps.
-Other platforms such as [Whoosh](https://pypi.python.org/pypi/Whoosh/), [Microsoft Visual Studio Team Services (VSTS)](https://www.visualstudio.com/team-services/) and [Pilosa](https://github.com/pilosa/pilosa) also use Roaring bitmaps with their own implementations. You find Roaring bitmaps in [InfluxDB](https://www.influxdata.com), [Bleve](http://www.blevesearch.com), [Cloud Torrent](https://github.com/jpillora/cloud-torrent), and so forth.
+Other platforms such as [Whoosh](https://pypi.python.org/pypi/Whoosh/), [Microsoft Visual Studio Team Services (VSTS)](https://www.visualstudio.com/team-services/) and [Pilosa](https://github.com/pilosa/pilosa) also use Roaring bitmaps with their own implementations. You find Roaring bitmaps in [InfluxDB](https://www.influxdata.com), [Bleve](http://www.blevesearch.com), [Cloud Torrent](https://github.com/jpillora/cloud-torrent), [Redpanda](https://github.com/redpanda-data/redpanda), and so forth.
 
 
 [There is a serialized format specification for interoperability between implementations](https://github.com/RoaringBitmap/RoaringFormatSpec/).
@@ -56,7 +84,7 @@ This code is licensed under Apache License, Version 2.0 (AL2.0).
 
 
 When should you use a bitmap?
-===================================
+-------------------------------
 
 
 Sets are a fundamental abstraction in
@@ -84,12 +112,12 @@ When the bitset approach is applicable, it can be orders of
 magnitude faster than other possible implementation of a set (e.g., as a hash set)
 while using several times less memory.
 
-However, a bitset, even a compressed one is not always applicable. For example, if 
+However, a bitset, even a compressed one is not always applicable. For example, if
 you have 1000 random-looking integers, then a simple array might be the best representation.
 We refer to this case as the "sparse" scenario.
 
 When should you use compressed bitmaps?
-===================================
+--------------------------
 
 An uncompressed BitSet can use a lot of memory. For example, if you take a BitSet
 and set the bit at position 1,000,000 to true and you have just over 100kB. That is over 100kB
@@ -100,7 +128,7 @@ whether you like it or not. That can become very wasteful.
 
 This being said, there are definitively cases where attempting to use compressed bitmaps is wasteful.
 For example, if you have a small universe size. E.g., your bitmaps represent sets of integers
-from [0,n) where n is small (e.g., n=64 or n=128). If you are able to uncompressed BitSet and
+from [0,n) where n is small (e.g., n=64 or n=128). If you can use an uncompressed BitSet and
 it does not blow up your memory usage,  then compressed bitmaps are probably not useful
 to you. In fact, if you do not need compression, then a BitSet offers remarkable speed.
 
@@ -109,9 +137,8 @@ Keep in mind that random-looking data is usually not compressible. E.g., if you 
 32-bit random integers, it is not mathematically possible to use far less than 32 bits per integer,
 and attempts at compression can be counterproductive.
 
-How does Roaring compares with the alternatives?
-==================================================
-
+How does Roaring compare with the alternatives?
+------------------------------------------------
 
 Most alternatives to Roaring are part of a larger family of compressed bitmaps that are run-length-encoded
 bitmaps. They identify long runs of 1s or 0s and they represent them with a marker word.
@@ -135,31 +162,16 @@ There is a big problem with these formats however that can hurt you badly in som
 
 Roaring solves this problem. It works in the following manner. It divides the data into chunks of 2<sup>16</sup> integers
 (e.g., [0, 2<sup>16</sup>), [2<sup>16</sup>, 2 x 2<sup>16</sup>), ...). Within a chunk, it can use an uncompressed bitmap, a simple list of integers,
-or a list of runs. Whatever format it uses, they all allow you to check for the present of any one value quickly
+or a list of runs. Whatever format it uses, they all allow you to check for the presence of any one value quickly
 (e.g., with a binary search). The net result is that Roaring can compute many operations much faster than run-length-encoded
 formats like WAH, EWAH, Concise... Maybe surprisingly, Roaring also generally offers better compression ratios.
 
 
 
-API docs
----------
-
-http://www.javadoc.io/doc/org.roaringbitmap/RoaringBitmap/
-
-Scientific Documentation
---------------------------
-
-- Daniel Lemire, Owen Kaser, Nathan Kurz, Luca Deri, Chris O'Hara, François Saint-Jacques, Gregory Ssi-Yan-Kai, Roaring Bitmaps: Implementation of an Optimized Software Library, Software: Practice and Experience 48 (4), 2018 [arXiv:1709.07821](https://arxiv.org/abs/1709.07821)
--  Samy Chambi, Daniel Lemire, Owen Kaser, Robert Godin,
-Better bitmap performance with Roaring bitmaps,
-Software: Practice and Experience 46 (5), 2016.[arXiv:1402.6407](http://arxiv.org/abs/1402.6407) This paper used data from http://lemire.me/data/realroaring2014.html
-- Daniel Lemire, Gregory Ssi-Yan-Kai, Owen Kaser, Consistently faster and smaller compressed bitmaps with Roaring, Software: Practice and Experience 46 (11), 2016. [arXiv:1603.06549](http://arxiv.org/abs/1603.06549)
-- Samy Chambi, Daniel Lemire, Robert Godin, Kamel Boukhalfa, Charles Allen, Fangjin Yang, Optimizing Druid with Roaring bitmaps, IDEAS 2016, 2016. http://r-libre.teluq.ca/950/
-
 Code sample
 -------------
 
-```java        
+```java
 import org.roaringbitmap.RoaringBitmap;
 
 public class Basic {
@@ -189,6 +201,203 @@ public class Basic {
 ```
 
 Please see the examples folder for more examples, which you can run with `./gradlew :examples:runAll`, or run a specific one with `./gradlew :examples:runExampleBitmap64`, etc.
+
+API docs
+---------
+
+http://www.javadoc.io/doc/org.roaringbitmap/RoaringBitmap/
+
+
+Download
+---------
+
+You can download releases from github:
+https://github.com/RoaringBitmap/RoaringBitmap/releases
+
+Usage within a Maven project
+---------
+
+### 1. Using JitPack
+
+
+Add the following dependency to your pom.xml file...
+
+```xml
+<dependency>
+    <groupId>com.github.RoaringBitmap.RoaringBitmap</groupId>
+    <artifactId>roaringbitmap</artifactId>
+    <version>1.3.16</version>
+</dependency>
+```
+
+You may adjust the version number.
+
+Then add the repository to your pom.xml file:
+
+```xml
+<repositories>
+    <repository>
+        <id>jitpack.io</id>
+        <url>https://jitpack.io</url>
+    </repository>
+</repositories>
+```
+See https://github.com/RoaringBitmap/JitPackRoaringBitmapProject for a complete example.
+
+
+### 2. Using GitHub Packages
+
+Add the following dependency to your `pom.xml` file inside the `<dependencies>` element...
+
+```xml
+<dependency>
+    <groupId>org.roaringbitmap</groupId>
+    <artifactId>roaringbitmap</artifactId>
+    <version>1.3.16</version>
+</dependency>
+```
+
+Add the GitHub repository inside the `<repositories>` element (`pom.xml` file)...
+
+```xml
+<repositories>
+    <repository>
+        <id>github</id>
+        <name>Roaring Maven Packages</name>
+        <url>https://maven.pkg.github.com/RoaringBitmap/RoaringBitmap</url>
+        <releases><enabled>true</enabled></releases>
+        <snapshots><enabled>true</enabled></snapshots>
+    </repository>
+</repositories>
+```
+
+See https://github.com/RoaringBitmap/MavenRoaringBitmapProject for a complete example.
+
+The registry access is is protected by an authorisation. So you have to add your GitHub credentials to your global settings.xml: `$HOME\.m2\settings.xml`.
+
+You will need a token which you can generate on GitHub.
+
+```
+GitHub > Settings > Developer Settings > Personal access tokens > Generate new token
+```
+
+The token needs the read:packages permission. The token identifier is a long string such as `ghp_ieOkN`.
+
+Put the following in your `settings.xml` file, within the `<servers>` element.
+
+```xml
+<server>
+  <id>github</id>
+  <username>lemire</username>
+  <password>ghp_ieOkN</password>
+</server>
+```
+
+Replace `lemire` by your GitHub username and `ghp_ieOkN` by the token identifier
+you just generated.
+
+Usage within a gradle project
+------------------
+
+### 1. Using JitPack
+
+Then all you need is to edit your `build.gradle` file like so:
+
+
+```groovy
+plugins {
+    id 'java'
+}
+
+group 'org.roaringbitmap' // name of your project
+version '1.0-SNAPSHOT' // version of your project
+
+repositories {
+    mavenCentral()
+    maven {
+        url 'https://jitpack.io'
+    }
+}
+
+dependencies {
+    implementation 'com.github.RoaringBitmap.RoaringBitmap:roaringbitmap:1.3.16'
+    testImplementation 'junit:junit:3.8.1'
+}
+```
+
+
+See https://github.com/RoaringBitmap/JitPackRoaringBitmapProject for a complete example.
+
+
+### 2. Using GitHub Packages
+
+
+You first need your GitHub credentials. Go
+to 
+
+```
+GitHub > Settings > Developer Settings > Personal access tokens > Generate new token
+```
+
+And create a token with read:packages permission.
+
+If your GitHub user name is `lemire` and your GitHub personal token `ghp_ieOkN`,
+then you can set them using system variables. Under bash, you can do it like so:
+```
+export GITHUB_USER=lemire
+export GITHUB_PASSWORD=ghp_ieOkN
+```
+
+
+If you prefer you can write your GitHub credentials in your  gradle.properties
+file
+
+```
+# gradle.properties
+githubUser=lemire
+githubPassword=ghp_ieOkN
+```
+
+Then all you need is to edit your `build.gradle` file like so:
+
+```groovy
+plugins {
+    id 'java'
+}
+
+group 'org.roaringbitmap' // name of your project
+version '1.0-SNAPSHOT' // version of your project
+
+repositories {
+    mavenCentral()
+    maven {
+        url 'https://maven.pkg.github.com/RoaringBitmap/RoaringBitmap'
+        credentials {
+            username = System.properties['githubUser'] ?: System.env.GITHUB_USER
+            password = System.properties['githubPassword'] ?: System.env.GITHUB_PASSWORD
+        }
+    }
+}
+
+dependencies {
+    implementation 'org.roaringbitmap:roaringbitmap:1.3.16'
+    testImplementation 'junit:junit:3.8.1'
+}
+```
+
+See https://github.com/RoaringBitmap/MavenRoaringBitmapProject for a complete example.
+
+
+
+Scientific Documentation
+--------------------------
+
+- Daniel Lemire, Owen Kaser, Nathan Kurz, Luca Deri, Chris O'Hara, François Saint-Jacques, Gregory Ssi-Yan-Kai, Roaring Bitmaps: Implementation of an Optimized Software Library, Software: Practice and Experience 48 (4), 2018 [arXiv:1709.07821](https://arxiv.org/abs/1709.07821)
+-  Samy Chambi, Daniel Lemire, Owen Kaser, Robert Godin,
+Better bitmap performance with Roaring bitmaps,
+Software: Practice and Experience 46 (5), 2016. [arXiv:1402.6407](http://arxiv.org/abs/1402.6407) This paper used data from http://lemire.me/data/realroaring2014.html
+- Daniel Lemire, Gregory Ssi-Yan-Kai, Owen Kaser, Consistently faster and smaller compressed bitmaps with Roaring, Software: Practice and Experience 46 (11), 2016. [arXiv:1603.06549](http://arxiv.org/abs/1603.06549)
+- Samy Chambi, Daniel Lemire, Robert Godin, Kamel Boukhalfa, Charles Allen, Fangjin Yang, Optimizing Druid with Roaring bitmaps, IDEAS 2016, 2016. http://r-libre.teluq.ca/950/
 
 
 Unsigned integers
@@ -266,7 +475,7 @@ generate a RoaringBitmap which lies in RAM. As the name suggest, the
 ImmutableRoaringBitmap itself cannot be modified.
 
 
-This design was inspired by Druid.
+This design was inspired by Apache Druid.
 
 One can find a complete working example in the test file TestMemoryMapping.java.
 
@@ -275,6 +484,10 @@ from the org.roaringbitmap.buffer package. They are incompatible. They serialize
 to the same output however. The performance of the code in org.roaringbitmap package is
 generally superior because there is no overhead due to the use of ByteBuffer instances.
 
+Thread safety
+-----
+
+In general, it is unsafe to access the same bitmaps using different threads--the bitmaps are unsynchronized for performance. Should you want to access a Bitmap from more than one thread, you should provide synchronization. However, you can access an immutable bitmap from multiple threads, as long as you abide by the `ImmutableBitmapDataProvider` interface.
 
 Kryo
 -----
@@ -314,19 +527,19 @@ public class RoaringSerializer extends Serializer<RoaringBitmap> {
 Though Roaring Bitmaps were designed with the 32-bit case in mind, we have extensions to 64-bit integers.
 We offer two classes for this purpose: `Roaring64NavigableMap` and `Roaring64Bitmap`.
 
-The  `Roaring64NavigableMap` relies on a conventional red-black-tree. The keys are 32-bit integers representing
+The `Roaring64NavigableMap` relies on a conventional red-black-tree. The keys are 32-bit integers representing
 the most significant 32~bits of  elements
 whereas the values of the tree are 32-bit Roaring bitmaps. The 32-bit Roaring bitmaps represent the least significant
 bits of a set of elements.
 
- The newer `Roaring64Bitmap` approach relies on the ART data structure to hold the key/value pair. The key 
+The newer `Roaring64Bitmap` approach relies on the ART data structure to hold the key/value pair. The key
  is made of the most significant 48~bits of elements whereas the values are 16-bit Roaring containers. It is inspired by
  [The Adaptive Radix Tree: ARTful Indexing for Main-Memory Databases](https://db.in.tum.de/~leis/papers/ART.pdf) by Leis et al. (ICDE '13).
 
 ```java
     import org.roaringbitmap.longlong.*;
 
-    
+
     // first Roaring64NavigableMap
     LongBitmapDataProvider r = Roaring64NavigableMap.bitmapOf(1,2,100,1000);
     r.addLong(1234);
@@ -349,18 +562,25 @@ bits of a set of elements.
     b1.and(bitmap2);
 ```
 
+The serialization of 64-bit Roaring bitmaps is specified: see
+https://github.com/RoaringBitmap/RoaringFormatSpec#extention-for-64-bit-implementations
+
+However, it is implemented only by `Roaring64NavigableMap`, by switching:
+
+    Roaring64NavigableMap.SERIALIZATION_MODE = Roaring64NavigableMap.SERIALIZATION_MODE_PORTABLE
+
 Range Bitmaps
 -------------
 
 `RangeBitmap` is a succinct data structure supporting range queries.
 Each value added to the bitmap is associated with an incremental identifier,
 and queries produce a `RoaringBitmap` of the identifiers associated with values
-that satisfy the query. Every value added to the bitmap is stored separately, 
-so that if a value is added twice, it will be stored twice, and if that value 
+that satisfy the query. Every value added to the bitmap is stored separately,
+so that if a value is added twice, it will be stored twice, and if that value
 is less than some threshold, there will be at least two integers in the resultant
 `RoaringBitmap`.
 
-It is more efficient - in terms of both time and space - to 
+It is more efficient - in terms of both time and space - to
 provide a maximum value. If you don't know the maximum value,
 provide a `Long.MAX_VALUE`. Unsigned order is used like elsewhere in
 the library.
@@ -374,6 +594,8 @@ RangeBitmap bitmap = appender.build();
 RoaringBitmap lessThan5 = bitmap.lt(5); // {0,1}
 RoaringBitmap greaterThanOrEqualTo1 = bitmap.gte(1); // {0, 1, 2}
 RoaringBitmap greaterThan1 = bitmap.gt(1); // {2}
+RoaringBitmap equalTo1 = bitmap.eq(1); // {0, 1}
+RoaringBitmap notEqualTo1 = bitmap.neq(1); // {2}
 ```
 
 `RangeBitmap` is can be written to disk and memory mapped:
@@ -398,60 +620,36 @@ Prerequisites
  - Version 0.6.x requires JDK 7 or better
  - Version 0.5.x requires JDK 6 or better
 
-To build the project you need maven (version 3).
 
 
-Download
----------
 
-You can download releases from github:
-https://github.com/RoaringBitmap/RoaringBitmap/releases
-
-Maven repository
-----------------
-If your project depends on roaring, you  can  specify the dependency in the Maven "pom.xml" file:
-
-```xml
-        <dependencies>
-          <dependency>
-            <groupId>org.roaringbitmap</groupId>
-            <artifactId>RoaringBitmap</artifactId>
-            <version>0.9.9</version>
-          </dependency>
-        </dependencies>
-```
-
-where you should replace the version number by the version you require.
-
-[For up-to-date releases, we recommend configuring maven and gradle to depend on the Jitpack repository](https://jitpack.io/#RoaringBitmap/RoaringBitmap). 
-
-Usage
+Usage for RoaringBitmap Developers
 ------
 
 * Get java
 
 * ``./gradlew assemble`` will compile
-* ``./gradlew build`` will compile and run the  unit tests
+* ``./gradlew build`` will compile and run the unit tests
 * ``./gradlew test `` will run the tests
-* ``./gradlew :roaringbitmap:test --tests TestIterators.testIndexIterator4`` run just the test `TestIterators.testIndexIterator4`
+* ``./gradlew :roaringbitmap:test --tests TestIterators.testIndexIterator4`` runs just the test `TestIterators.testIndexIterator4`; `./gradlew -i :roaringbitmap:test --tests TestRoaringBitmap.issue623` runs just the test `issue623` in the class ` TestRoaringBitmap` while printing out to the console.
 * ``./gradlew  bsi:test --tests BufferBSITest.testEQ``  run just the test `BufferBSITest.testEQ` in the `bsi` submodule
-* ``./gradlew checkstyleMain`` will check that you abide by the code style and that the code compiles. We enforce a strict style so that there is no debate as to the proper way to format the code.
 
 
 IntelliJ and Eclipse
 --------
 
-If you plan to contribute to RoaringBitmap, you can have load
+If you plan to contribute to RoaringBitmap, you can load
 it up in your favorite IDE.
 - For IntelliJ, in the IDE create a new project, possibly from existing sources, choose import, gradle.
-- For Eclipse: File, Import, Existing Gradle Projects, Select RoaringBitmap on my disk
+- For Eclipse: File, Import, Existing Gradle Projects, Select RoaringBitmap from your disk.
 
 Contributing
 ------------
 
-Contributions are invited. We enforce the Google Java style.
-Please run  ``./gradlew checkstyleMain`` on your code before submitting
-a patch.
+Contributions are invited. We use the Google Java style (see `roaring_google_checks.xml`). It can be applied
+automatically to your code with `./gradlew spotlessApply`
+
+Please do not reformat the code needlessly (especially on comments/javadoc).
 
 FAQ
 ----
@@ -505,11 +703,16 @@ application, you might be better served with a conventional bitset (e.g., Java's
 Benchmark
 -----------
 
-To run JMH benchmarks, use the following command:
+To run JMH benchmarks, use the following commands:
 
-         $ ./gradlew jmhJar
+         $ ./gradlew jmh::shadowJar
+         $ java -jar jmh/build/libs/benchmarks.jar
 
-You can also run specific benchmarks...
+You can also run a specific benchmark:
+
+         $ java -jar jmh/build/libs/benchmarks.jar 'org.roaringbitmap.aggregation.and.identical.*'
+
+If you have a bash shell, you can also run our script which automatically builds and run specific tests...
 
          $ ./jmh/run.sh 'org.roaringbitmap.aggregation.and.identical.*'
 
@@ -517,7 +720,7 @@ You can also run specific benchmarks...
 Mailing list/discussion group
 -----------------------------
 
-https://groups.google.com/forum/#!forum/roaring-bitmaps
+https://groups.google.com/forum/#!forum/roaringbitmaps
 
 Funding
 ----------

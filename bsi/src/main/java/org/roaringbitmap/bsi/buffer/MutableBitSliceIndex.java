@@ -5,11 +5,13 @@ import org.roaringbitmap.bsi.Pair;
 import org.roaringbitmap.bsi.WritableUtils;
 import org.roaringbitmap.buffer.ImmutableRoaringBitmap;
 import org.roaringbitmap.buffer.MutableRoaringBitmap;
+
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.List;
+import java.util.Objects;
 import java.util.OptionalInt;
 
 /**
@@ -27,27 +29,28 @@ public class MutableBitSliceIndex extends BitSliceIndexBase implements BitmapSli
    * @param bA  bit slices for this bsi.using MutableRoaringBitmap array express
    * @param ebM exits value bitmap,use MutableRoaringBitmap express
    */
-  public MutableBitSliceIndex(int maxValue, int minValue, 
-      MutableRoaringBitmap[] bA, MutableRoaringBitmap ebM) {
+  public MutableBitSliceIndex(
+      int maxValue, int minValue, MutableRoaringBitmap[] bA, MutableRoaringBitmap ebM) {
     this.maxValue = maxValue;
     this.minValue = minValue;
     this.bA = bA;
     this.ebM = ebM;
   }
 
-
   /**
    * construct a new MutableBitSliceIndex.
    * Min/Max values are optional.  If set to 0 then the underlying BSI will be automatically sized.
    */
   public MutableBitSliceIndex(int minValue, int maxValue) {
+    if (minValue < 0) {
+      throw new IllegalArgumentException("Values should be non-negative");
+    }
+
     this.bA = new MutableRoaringBitmap[32 - Integer.numberOfLeadingZeros(maxValue)];
     for (int i = 0; i < bA.length; i++) {
       this.bA[i] = new MutableRoaringBitmap();
     }
     this.ebM = new MutableRoaringBitmap();
-    this.maxValue = maxValue;
-    this.minValue = minValue;
   }
 
   /**
@@ -58,19 +61,15 @@ public class MutableBitSliceIndex extends BitSliceIndexBase implements BitmapSli
   }
 
   private void ensureCapacityInternal(int minValue, int maxValue) {
-    // If max/min values are set to zero then automatically determine bit array size
-    if (this.maxValue == 0 && this.minValue == 0) {
-      this.maxValue = maxValue;
+    if (ebM.isEmpty()) {
       this.minValue = minValue;
-      this.bA = new MutableRoaringBitmap[Integer.toBinaryString(maxValue).length()];
-      for (int i = 0; i < this.bA.length; i++) {
-        this.bA[i] = new MutableRoaringBitmap();
-      }
-    } else if (maxValue > this.maxValue) {
-      int newBitDepth = Integer.toBinaryString(maxValue).length();
-      int oldBitDepth = this.bA.length;
-      grow(newBitDepth, oldBitDepth);
       this.maxValue = maxValue;
+      grow(Integer.toBinaryString(maxValue).length());
+    } else if (this.minValue > minValue) {
+      this.minValue = minValue;
+    } else if (this.maxValue < maxValue) {
+      this.maxValue = maxValue;
+      grow(Integer.toBinaryString(maxValue).length());
     }
   }
 
@@ -78,11 +77,20 @@ public class MutableBitSliceIndex extends BitSliceIndexBase implements BitmapSli
    * auto expend the bA length.
    *
    * @param newBitDepth new bit depth
-   * @param oldBitDepth old bit depth
    */
-  private void grow(int newBitDepth, int oldBitDepth) {
+  private void grow(int newBitDepth) {
+    int oldBitDepth = this.bA.length;
+
+    if (oldBitDepth >= newBitDepth) {
+      return;
+    }
+
     MutableRoaringBitmap[] newBA = new MutableRoaringBitmap[newBitDepth];
-    System.arraycopy(this.bA, 0, newBA, 0, oldBitDepth);
+
+    if (oldBitDepth != 0) {
+      System.arraycopy(this.bA, 0, newBA, 0, oldBitDepth);
+    }
+
     for (int i = newBitDepth - 1; i >= oldBitDepth; i--) {
       newBA[i] = new MutableRoaringBitmap();
       if (this.runOptimized) {
@@ -91,7 +99,6 @@ public class MutableBitSliceIndex extends BitSliceIndexBase implements BitmapSli
     }
     this.bA = newBA;
   }
-
 
   /**
    * RunOptimize attempts to further compress the runs of consecutive values found in the bitmap
@@ -110,19 +117,14 @@ public class MutableBitSliceIndex extends BitSliceIndexBase implements BitmapSli
   }
 
   public void addDigit(MutableRoaringBitmap foundSet, int i) {
-    if (i >= this.bitCount()) {
-      grow(this.bitCount() + 1, this.bitCount());
-    }
-
-    MutableRoaringBitmap carry = MutableRoaringBitmap.and(this.getMutableSlice(i), foundSet);
+    MutableRoaringBitmap carry = MutableRoaringBitmap.and(this.bA[i], foundSet);
     this.getMutableSlice(i).xor(foundSet);
-    if (carry.getCardinality() > 0) {
-      if (i + 1 > this.bitCount()) {
-        grow(this.bitCount() + 1, this.bitCount());
+    if (!carry.isEmpty()) {
+      if (i + 1 >= this.bitCount()) {
+        grow(this.bitCount() + 1);
       }
       this.addDigit(carry, i + 1);
     }
-
   }
 
   public MutableRoaringBitmap getExistenceBitmap() {
@@ -140,24 +142,32 @@ public class MutableBitSliceIndex extends BitSliceIndexBase implements BitmapSli
    * @param value the value for columnID
    */
   public void setValue(int columnId, int value) {
-    ensureCapacityInternal(0, value);
-    for (int i = 0; i < this.bitCount(); i++) {
+    ensureCapacityInternal(value, value);
+    setValueInternal(columnId, value);
+  }
+
+  private void setValueInternal(int columnId, int value) {
+    for (int i = 0; i < this.bitCount(); i += 1) {
       if ((value & (1 << i)) > 0) {
         this.getMutableSlice(i).add(columnId);
       } else {
         this.getMutableSlice(i).remove(columnId);
       }
     }
+
     this.getExistenceBitmap().add(columnId);
   }
 
-
-  public void setValues(List<Pair<Integer, Integer>> values, 
-      Integer currentMaxValue, Integer currentMinValue) {
-    OptionalInt maxValue = currentMaxValue != null 
-        ? OptionalInt.of(currentMaxValue) : values.stream().mapToInt(Pair::getRight).max();
-    OptionalInt minValue = currentMinValue != null 
-        ? OptionalInt.of(currentMinValue) : values.stream().mapToInt(Pair::getRight).min();
+  public void setValues(
+      List<Pair<Integer, Integer>> values, Integer currentMaxValue, Integer currentMinValue) {
+    OptionalInt maxValue =
+        currentMaxValue != null
+            ? OptionalInt.of(currentMaxValue)
+            : values.stream().mapToInt(Pair::getRight).max();
+    OptionalInt minValue =
+        currentMinValue != null
+            ? OptionalInt.of(currentMinValue)
+            : values.stream().mapToInt(Pair::getRight).min();
 
     if (!maxValue.isPresent() || !minValue.isPresent()) {
       throw new IllegalArgumentException("wrong input values list");
@@ -167,9 +177,24 @@ public class MutableBitSliceIndex extends BitSliceIndexBase implements BitmapSli
     for (Pair<Integer, Integer> pair : values) {
       this.setValue(pair.getKey(), pair.getValue());
     }
-
   }
 
+  /**
+   * Set a batch of values.
+   *
+   * @param values
+   */
+  @Override
+  public void setValues(List<Pair<Integer, Integer>> values) {
+    int maxValue =
+        values.stream().mapToInt(Pair::getRight).filter(Objects::nonNull).max().getAsInt();
+    int minValue =
+        values.stream().mapToInt(Pair::getRight).filter(Objects::nonNull).min().getAsInt();
+    ensureCapacityInternal(minValue, maxValue);
+    for (Pair<Integer, Integer> pair : values) {
+      setValueInternal(pair.getKey(), pair.getValue());
+    }
+  }
 
   /**
    * add tow bsi index
@@ -182,9 +207,60 @@ public class MutableBitSliceIndex extends BitSliceIndexBase implements BitmapSli
     }
 
     this.getExistenceBitmap().or(otherBsi.getExistenceBitmap());
+    if (otherBsi.bitCount() > this.bitCount()) {
+      grow(otherBsi.bitCount());
+    }
+
     for (int i = 0; i < otherBsi.bitCount(); i++) {
       this.addDigit(otherBsi.getMutableSlice(i), i);
     }
+
+    // update min and max after adding
+    this.minValue = minValue();
+    this.maxValue = maxValue();
+  }
+
+  private int minValue() {
+    if (ebM.isEmpty()) {
+      return 0;
+    }
+
+    MutableRoaringBitmap minValuesId = getExistenceBitmap();
+    for (int i = bA.length - 1; i >= 0; i -= 1) {
+      MutableRoaringBitmap tmp = MutableRoaringBitmap.andNot(minValuesId, bA[i]);
+      if (!tmp.isEmpty()) {
+        minValuesId = tmp;
+      }
+    }
+
+    return valueAt(minValuesId.first());
+  }
+
+  private int maxValue() {
+    if (ebM.isEmpty()) {
+      return 0;
+    }
+
+    MutableRoaringBitmap maxValuesId = getExistenceBitmap();
+    for (int i = bA.length - 1; i >= 0; i -= 1) {
+      MutableRoaringBitmap tmp = MutableRoaringBitmap.and(maxValuesId, bA[i]);
+      if (!tmp.isEmpty()) {
+        maxValuesId = tmp;
+      }
+    }
+
+    return valueAt(maxValuesId.first());
+  }
+
+  private int valueAt(int columnId) {
+    int value = 0;
+    for (int i = 0; i < this.bitCount(); i += 1) {
+      if (this.bA[i].contains(columnId)) {
+        value |= (1 << i);
+      }
+    }
+
+    return value;
   }
 
   /**
@@ -201,16 +277,16 @@ public class MutableBitSliceIndex extends BitSliceIndexBase implements BitmapSli
 
     // todo whether we need this
     if (MutableRoaringBitmap.intersects(this.ebM, otherBsi.ebM)) {
-      throw new IllegalArgumentException("merge can be used only in bsiA ∩ bsiB  is null");
+      throw new IllegalArgumentException("merge can be used only in bsiA  bsiB  is null");
     }
 
     int bitDepth = Integer.max(this.bitCount(), otherBsi.bitCount());
     MutableRoaringBitmap[] newBA = new MutableRoaringBitmap[bitDepth];
     for (int i = 0; i < bitDepth; i++) {
-      MutableRoaringBitmap current = i < this.bA.length 
-          ? this.getMutableSlice(i) : new MutableRoaringBitmap();
-      MutableRoaringBitmap other = i < otherBsi.bA.length 
-          ? otherBsi.getMutableSlice(i) : new MutableRoaringBitmap();
+      MutableRoaringBitmap current =
+          i < this.bA.length ? this.getMutableSlice(i) : new MutableRoaringBitmap();
+      MutableRoaringBitmap other =
+          i < otherBsi.bA.length ? otherBsi.getMutableSlice(i) : new MutableRoaringBitmap();
       newBA[i] = MutableRoaringBitmap.or(current, other);
       if (this.runOptimized || otherBsi.runOptimized) {
         newBA[i].runOptimize();
@@ -236,7 +312,6 @@ public class MutableBitSliceIndex extends BitSliceIndexBase implements BitmapSli
     bitSliceIndex.runOptimized = this.runOptimized;
 
     return bitSliceIndex;
-
   }
 
   public void serialize(ByteBuffer buffer) {
@@ -276,7 +351,6 @@ public class MutableBitSliceIndex extends BitSliceIndexBase implements BitmapSli
     this.ebM = null;
     this.bA = null;
   }
-
 
   public void deserialize(ByteBuffer buffer) throws IOException {
     this.clear();
@@ -332,7 +406,7 @@ public class MutableBitSliceIndex extends BitSliceIndexBase implements BitmapSli
       size += rb.serializedSizeInBytes();
     }
     return 4 + 4 + 1 + 4 + this.ebM.serializedSizeInBytes() + size;
-   }
+  }
 
   public ImmutableBitSliceIndex toImmutableBitSliceIndex() {
     ImmutableRoaringBitmap[] ibA = new ImmutableRoaringBitmap[this.bA.length];
@@ -340,9 +414,8 @@ public class MutableBitSliceIndex extends BitSliceIndexBase implements BitmapSli
       ibA[i] = this.bA[i];
     }
 
-    ImmutableBitSliceIndex bsi = new ImmutableBitSliceIndex(
-        this.maxValue, this.minValue, ibA, this.ebM);
+    ImmutableBitSliceIndex bsi =
+        new ImmutableBitSliceIndex(this.maxValue, this.minValue, ibA, this.ebM);
     return bsi;
   }
 }
-

@@ -7,6 +7,7 @@ import java.io.DataOutput;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.IntStream;
 
 /**
@@ -33,7 +34,6 @@ public class RoaringBitmapSliceIndex implements BitmapSliceIndex {
    */
   private RoaringBitmap ebM;
 
-
   private Boolean runOptimized = false;
 
   /**
@@ -41,16 +41,17 @@ public class RoaringBitmapSliceIndex implements BitmapSliceIndex {
    * then the underlying BSI will be automatically sized.
    */
   public RoaringBitmapSliceIndex(int minValue, int maxValue) {
-
-    bA = new RoaringBitmap[32 - Integer.numberOfLeadingZeros(maxValue)];
-    for (int i = 0; i < bA.length; i++) {
-      bA[i] = new RoaringBitmap();
+    if (minValue < 0) {
+      throw new IllegalArgumentException("Values should be non-negative");
     }
-    this.ebM = new RoaringBitmap();
-    this.maxValue = maxValue;
-    this.minValue = minValue;
-  }
 
+    this.bA = new RoaringBitmap[32 - Integer.numberOfLeadingZeros(maxValue)];
+    for (int i = 0; i < bA.length; i++) {
+      this.bA[i] = new RoaringBitmap();
+    }
+
+    this.ebM = new RoaringBitmap();
+  }
 
   /**
    * NewDefaultBSI constructs an auto-sized BSI
@@ -59,28 +60,77 @@ public class RoaringBitmapSliceIndex implements BitmapSliceIndex {
     this(0, 0);
   }
 
-
   public void add(RoaringBitmapSliceIndex otherBsi) {
+    if (null == otherBsi || otherBsi.ebM.isEmpty()) {
+      return;
+    }
+
     this.ebM.or(otherBsi.ebM);
+    if (otherBsi.bitCount() > this.bitCount()) {
+      grow(otherBsi.bitCount());
+    }
+
     for (int i = 0; i < otherBsi.bitCount(); i++) {
       this.addDigit(otherBsi.bA[i], i);
     }
+
+    // update min and max after adding
+    this.minValue = minValue();
+    this.maxValue = maxValue();
   }
 
   private void addDigit(RoaringBitmap foundSet, int i) {
-    if (i >= this.bitCount()) {
-      grow(this.bitCount() + 1, this.bitCount());
-    }
-
     RoaringBitmap carry = RoaringBitmap.and(this.bA[i], foundSet);
     this.bA[i].xor(foundSet);
-    if (carry.getCardinality() > 0) {
-      if (i + 1 > this.bitCount()) {
-        grow(this.bitCount() + 1, this.bitCount());
+    if (!carry.isEmpty()) {
+      if (i + 1 >= this.bitCount()) {
+        grow(this.bitCount() + 1);
       }
       this.addDigit(carry, i + 1);
     }
+  }
 
+  private int minValue() {
+    if (ebM.isEmpty()) {
+      return 0;
+    }
+
+    RoaringBitmap minValuesId = ebM;
+    for (int i = bA.length - 1; i >= 0; i -= 1) {
+      RoaringBitmap tmp = RoaringBitmap.andNot(minValuesId, bA[i]);
+      if (!tmp.isEmpty()) {
+        minValuesId = tmp;
+      }
+    }
+
+    return valueAt(minValuesId.first());
+  }
+
+  private int maxValue() {
+    if (ebM.isEmpty()) {
+      return 0;
+    }
+
+    RoaringBitmap maxValuesId = ebM;
+    for (int i = bA.length - 1; i >= 0; i -= 1) {
+      RoaringBitmap tmp = RoaringBitmap.and(maxValuesId, bA[i]);
+      if (!tmp.isEmpty()) {
+        maxValuesId = tmp;
+      }
+    }
+
+    return valueAt(maxValuesId.first());
+  }
+
+  private int valueAt(int columnId) {
+    int value = 0;
+    for (int i = 0; i < this.bitCount(); i += 1) {
+      if (this.bA[i].contains(columnId)) {
+        value |= (1 << i);
+      }
+    }
+
+    return value;
   }
 
   /**
@@ -98,7 +148,6 @@ public class RoaringBitmapSliceIndex implements BitmapSliceIndex {
   /**
    * hasRunCompression returns true if the bitmap benefits from run compression
    */
-
   public boolean hasRunCompression() {
     return this.runOptimized;
   }
@@ -106,11 +155,9 @@ public class RoaringBitmapSliceIndex implements BitmapSliceIndex {
   /**
    * GetExistenceBitmap returns a pointer to the underlying existence bitmap of the BSI
    */
-
   public RoaringBitmap getExistenceBitmap() {
     return this.ebM;
   }
-
 
   public int bitCount() {
     return this.bA.length;
@@ -120,7 +167,6 @@ public class RoaringBitmapSliceIndex implements BitmapSliceIndex {
     return this.ebM.getLongCardinality();
   }
 
-
   /**
    * GetValue gets the value at the column ID.  Second param will be false for non-existence values.
    */
@@ -129,15 +175,9 @@ public class RoaringBitmapSliceIndex implements BitmapSliceIndex {
     if (!exists) {
       return Pair.newPair(0, false);
     }
-    int value = 0;
-    for (int i = 0; i < this.bitCount(); i++) {
-      if (this.bA[i].contains(columnId)) {
-        value |= (1 << i);
-      }
-    }
-    return Pair.newPair(value, true);
-  }
 
+    return Pair.newPair(valueAt(columnId), true);
+  }
 
   private void clear() {
     this.maxValue = 0;
@@ -200,7 +240,6 @@ public class RoaringBitmapSliceIndex implements BitmapSliceIndex {
     for (RoaringBitmap rb : this.bA) {
       rb.serialize(buffer);
     }
-
   }
 
   public void deserialize(ByteBuffer buffer) throws IOException {
@@ -236,7 +275,6 @@ public class RoaringBitmapSliceIndex implements BitmapSliceIndex {
     return 4 + 4 + 1 + 4 + this.ebM.serializedSizeInBytes() + size;
   }
 
-
   /**
    * valueExists tests whether the value exists.
    */
@@ -248,8 +286,12 @@ public class RoaringBitmapSliceIndex implements BitmapSliceIndex {
    * SetValue sets a value for a given columnID.
    */
   public void setValue(int columnId, int value) {
-    ensureCapacityInternal(0, value);
-    for (int i = 0; i < this.bitCount(); i++) {
+    ensureCapacityInternal(value, value);
+    setValueInternal(columnId, value);
+  }
+
+  private void setValueInternal(int columnId, int value) {
+    for (int i = 0; i < this.bitCount(); i += 1) {
       if ((value & (1 << i)) > 0) {
         this.bA[i].add(columnId);
       } else {
@@ -260,25 +302,30 @@ public class RoaringBitmapSliceIndex implements BitmapSliceIndex {
   }
 
   private void ensureCapacityInternal(int minValue, int maxValue) {
-    // If max/min values are set to zero then automatically determine bit array size
-    if (this.maxValue == 0 && this.minValue == 0) {
-      this.maxValue = maxValue;
+    if (ebM.isEmpty()) {
       this.minValue = minValue;
-      this.bA = new RoaringBitmap[Integer.toBinaryString(maxValue).length()];
-      for (int i = 0; i < this.bA.length; i++) {
-        this.bA[i] = new RoaringBitmap();
-      }
-    } else if (maxValue > this.maxValue) {
-      int newBitDepth = Integer.toBinaryString(maxValue).length();
-      int oldBitDepth = this.bA.length;
-      grow(newBitDepth, oldBitDepth);
       this.maxValue = maxValue;
+      grow(Integer.toBinaryString(maxValue).length());
+    } else if (this.minValue > minValue) {
+      this.minValue = minValue;
+    } else if (this.maxValue < maxValue) {
+      this.maxValue = maxValue;
+      grow(Integer.toBinaryString(maxValue).length());
     }
   }
 
-  private void grow(int newBitDepth, int oldBitDepth) {
+  private void grow(int newBitDepth) {
+    int oldBitDepth = this.bA.length;
+
+    if (oldBitDepth >= newBitDepth) {
+      return;
+    }
+
     RoaringBitmap[] newBA = new RoaringBitmap[newBitDepth];
-    System.arraycopy(this.bA, 0, newBA, 0, oldBitDepth);
+    if (oldBitDepth != 0) {
+      System.arraycopy(this.bA, 0, newBA, 0, oldBitDepth);
+    }
+
     for (int i = newBitDepth - 1; i >= oldBitDepth; i--) {
       newBA[i] = new RoaringBitmap();
       if (this.runOptimized) {
@@ -288,9 +335,32 @@ public class RoaringBitmapSliceIndex implements BitmapSliceIndex {
     this.bA = newBA;
   }
 
-  public void setValues(List<Pair<Integer, Integer>> values, Integer currentMaxValue, Integer currentMinValue) {
-    int maxValue = currentMaxValue != null ? currentMaxValue : values.stream().mapToInt(Pair::getRight).max().getAsInt();
-    int minValue = currentMinValue != null ? currentMinValue : values.stream().mapToInt(Pair::getRight).min().getAsInt();
+  @Override
+  public void setValues(List<Pair<Integer, Integer>> values) {
+    int maxValue =
+        values.stream().mapToInt(Pair::getRight).filter(Objects::nonNull).max().getAsInt();
+    int minValue =
+        values.stream().mapToInt(Pair::getRight).filter(Objects::nonNull).min().getAsInt();
+    ensureCapacityInternal(minValue, maxValue);
+    for (Pair<Integer, Integer> pair : values) {
+      setValueInternal(pair.getKey(), pair.getValue());
+    }
+  }
+
+  /**
+   * Replaced by {@code setValues(values)}
+   */
+  @Deprecated
+  public void setValues(
+      List<Pair<Integer, Integer>> values, Integer currentMaxValue, Integer currentMinValue) {
+    int maxValue =
+        currentMaxValue != null
+            ? currentMaxValue
+            : values.stream().mapToInt(Pair::getRight).max().getAsInt();
+    int minValue =
+        currentMinValue != null
+            ? currentMinValue
+            : values.stream().mapToInt(Pair::getRight).min().getAsInt();
     ensureCapacityInternal(minValue, maxValue);
     for (Pair<Integer, Integer> pair : values) {
       this.setValue(pair.getKey(), pair.getValue());
@@ -312,7 +382,7 @@ public class RoaringBitmapSliceIndex implements BitmapSliceIndex {
 
     // todo whether we need this
     if (RoaringBitmap.intersects(this.ebM, otherBsi.ebM)) {
-      throw new IllegalArgumentException("merge can be used only in bsiA ∩ bsiB  is null");
+      throw new IllegalArgumentException("merge can be used only in bsiA  bsiB  is null");
     }
 
     int bitDepth = Integer.max(this.bitCount(), otherBsi.bitCount());
@@ -331,7 +401,6 @@ public class RoaringBitmapSliceIndex implements BitmapSliceIndex {
     this.maxValue = Integer.max(this.maxValue, otherBsi.maxValue);
     this.minValue = Integer.min(this.minValue, otherBsi.minValue);
   }
-
 
   public RoaringBitmapSliceIndex clone() {
     RoaringBitmapSliceIndex bitSliceIndex = new RoaringBitmapSliceIndex();
@@ -357,13 +426,13 @@ public class RoaringBitmapSliceIndex implements BitmapSliceIndex {
    * @return columnId set we found in this bsi with giving conditions, using RoaringBitmap to express
    * see https://github.com/lemire/BitSliceIndex/blob/master/src/main/java/org/roaringbitmap/circuits/comparator/BasicComparator.java
    */
-  private RoaringBitmap oNeilCompare(BitmapSliceIndex.Operation operation, int predicate, RoaringBitmap foundSet) {
+  private RoaringBitmap oNeilCompare(
+      BitmapSliceIndex.Operation operation, int predicate, RoaringBitmap foundSet) {
     RoaringBitmap fixedFoundSet = foundSet == null ? this.ebM : foundSet;
 
     RoaringBitmap GT = new RoaringBitmap();
     RoaringBitmap LT = new RoaringBitmap();
     RoaringBitmap EQ = this.ebM;
-
 
     for (int i = this.bitCount() - 1; i >= 0; i--) {
       int bit = (predicate >> i) & 1;
@@ -374,7 +443,6 @@ public class RoaringBitmapSliceIndex implements BitmapSliceIndex {
         GT = RoaringBitmap.or(GT, RoaringBitmap.and(EQ, this.bA[i]));
         EQ = RoaringBitmap.andNot(EQ, this.bA[i]);
       }
-
     }
     EQ = RoaringBitmap.and(fixedFoundSet, EQ);
     switch (operation) {
@@ -387,9 +455,9 @@ public class RoaringBitmapSliceIndex implements BitmapSliceIndex {
       case LT:
         return RoaringBitmap.and(LT, fixedFoundSet);
       case LE:
-        return RoaringBitmap.or(LT, EQ);
+        return RoaringBitmap.and(RoaringBitmap.or(LT, EQ), fixedFoundSet);
       case GE:
-        return RoaringBitmap.or(GT, EQ);
+        return RoaringBitmap.and(RoaringBitmap.or(GT, EQ), fixedFoundSet);
       default:
         throw new IllegalArgumentException("");
     }
@@ -407,12 +475,12 @@ public class RoaringBitmapSliceIndex implements BitmapSliceIndex {
    * @param foundSet    columnId set we want compare,using RoaringBitmap to express
    * @return columnId set we found in this bsi with giving conditions, using RoaringBitmap to express
    */
-  public RoaringBitmap compare(BitmapSliceIndex.Operation operation, int startOrValue, int end, RoaringBitmap foundSet) {
-    // todo whether we need this or not?
-    if (startOrValue > this.maxValue || (end > 0 && end < this.minValue)) {
-      return new RoaringBitmap();
+  public RoaringBitmap compare(
+      BitmapSliceIndex.Operation operation, int startOrValue, int end, RoaringBitmap foundSet) {
+    RoaringBitmap result = compareUsingMinMax(operation, startOrValue, end, foundSet);
+    if (result != null) {
+      return result;
     }
-    startOrValue = startOrValue == 0 ? 1 : startOrValue;
 
     switch (operation) {
       case EQ:
@@ -421,24 +489,99 @@ public class RoaringBitmapSliceIndex implements BitmapSliceIndex {
         return oNeilCompare(Operation.NEQ, startOrValue, foundSet);
       case GE:
         return oNeilCompare(Operation.GE, startOrValue, foundSet);
-      case GT: {
-        return oNeilCompare(BitmapSliceIndex.Operation.GT, startOrValue, foundSet);
-      }
+      case GT:
+        {
+          return oNeilCompare(BitmapSliceIndex.Operation.GT, startOrValue, foundSet);
+        }
       case LT:
         return oNeilCompare(BitmapSliceIndex.Operation.LT, startOrValue, foundSet);
 
       case LE:
         return oNeilCompare(BitmapSliceIndex.Operation.LE, startOrValue, foundSet);
 
-      case RANGE: {
-        RoaringBitmap left = oNeilCompare(Operation.GE, startOrValue, foundSet);
-        RoaringBitmap right = oNeilCompare(BitmapSliceIndex.Operation.LE, end, foundSet);
+      case RANGE:
+        {
+          if (startOrValue < minValue) {
+            startOrValue = minValue;
+          }
+          if (end > maxValue) {
+            end = maxValue;
+          }
+          RoaringBitmap left = oNeilCompare(Operation.GE, startOrValue, foundSet);
+          RoaringBitmap right = oNeilCompare(BitmapSliceIndex.Operation.LE, end, foundSet);
 
-        return RoaringBitmap.and(left, right);
-      }
+          return RoaringBitmap.and(left, right);
+        }
       default:
         throw new IllegalArgumentException("not support operation!");
     }
+  }
+
+  private RoaringBitmap compareUsingMinMax(
+      BitmapSliceIndex.Operation operation, int startOrValue, int end, RoaringBitmap foundSet) {
+    RoaringBitmap all = foundSet == null ? ebM.clone() : RoaringBitmap.and(ebM, foundSet);
+    RoaringBitmap empty = new RoaringBitmap();
+
+    switch (operation) {
+      case LT:
+        if (startOrValue > maxValue) {
+          return all;
+        } else if (startOrValue <= minValue) {
+          return empty;
+        }
+
+        break;
+      case LE:
+        if (startOrValue >= maxValue) {
+          return all;
+        } else if (startOrValue < minValue) {
+          return empty;
+        }
+
+        break;
+      case GT:
+        if (startOrValue < minValue) {
+          return all;
+        } else if (startOrValue >= maxValue) {
+          return empty;
+        }
+
+        break;
+      case GE:
+        if (startOrValue <= minValue) {
+          return all;
+        } else if (startOrValue > maxValue) {
+          return empty;
+        }
+
+        break;
+      case EQ:
+        if (minValue == maxValue && minValue == startOrValue) {
+          return all;
+        } else if (startOrValue < minValue || startOrValue > maxValue) {
+          return empty;
+        }
+
+        break;
+      case NEQ:
+        if (minValue == maxValue) {
+          return minValue == startOrValue ? empty : all;
+        }
+
+        break;
+      case RANGE:
+        if (startOrValue <= minValue && end >= maxValue) {
+          return all;
+        } else if (startOrValue > maxValue || end < minValue) {
+          return empty;
+        }
+
+        break;
+      default:
+        return null;
+    }
+
+    return null;
   }
 
   public Pair<Long, Long> sum(RoaringBitmap foundSet) {
@@ -447,12 +590,11 @@ public class RoaringBitmapSliceIndex implements BitmapSliceIndex {
     }
     long count = foundSet.getLongCardinality();
 
-    Long sum = IntStream.range(0, this.bitCount())
-        .mapToLong(x -> (long) (1 << x) * RoaringBitmap.andCardinality(this.bA[x], foundSet))
-        .sum();
+    Long sum =
+        IntStream.range(0, this.bitCount())
+            .mapToLong(x -> (long) (1 << x) * RoaringBitmap.andCardinality(this.bA[x], foundSet))
+            .sum();
 
     return Pair.newPair(sum, count);
   }
-
 }
-

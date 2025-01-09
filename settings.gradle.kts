@@ -1,6 +1,5 @@
 include(
-        "RoaringBitmap",
-        "shims",
+        "roaringbitmap",
         "bsi",
         "fuzz-tests",
         "jmh",

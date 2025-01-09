@@ -1,11 +1,11 @@
-import java.net.URI
-import java.time.Duration
-
 plugins {
     id("net.researchgate.release") version "2.8.1"
-    id("io.github.gradle-nexus.publish-plugin") version "1.0.0"
     id("com.github.ben-manes.versions") version "0.38.0"
+    id("maven-publish")
+    id("com.diffplug.spotless") version "6.25.0"
 }
+
+
 
 // some parts of the Kotlin DSL don't work inside a `subprojects` block yet, so we do them the old way
 // (without typesafe accessors)
@@ -26,20 +26,14 @@ subprojects {
         mavenCentral()
     }
 
-    configure<JavaPluginExtension> {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
-    }
-
     group = "org.roaringbitmap"
 
     tasks {
         withType<JavaCompile> {
             options.isDeprecation = true
             options.isWarnings = true
-            if (JavaVersion.current().isJava9Compatible) {
-                options.compilerArgs = listOf("--release", "8", "-Xlint:unchecked")
-            }
+            options.compilerArgs = listOf("-Xlint:unchecked")
+            options.release.set(8)
         }
 
         withType<Javadoc> {
@@ -49,33 +43,62 @@ subprojects {
                 (this as StandardJavadocDocletOptions).addBooleanOption("Xdoclint:none").value = true
             }
         }
+
+        withType<Test> {
+            val javaToolchains  = project.extensions.getByType<JavaToolchainService>()
+            javaLauncher.set(javaToolchains.launcherFor {
+                languageVersion.set(
+                    JavaLanguageVersion.of((project.properties["testOnJava"] ?: "11").toString()))
+            })
+        }
     }
-}
 
-subprojects.filter { !listOf("jmh", "fuzz-tests", "examples", "bsi", "simplebenchmark").contains(it.name) }.forEach {
-    it.run {
-        apply(plugin = "checkstyle")
+    apply(plugin = "com.diffplug.spotless")
 
-        tasks {
-            withType<Checkstyle> {
-                configFile = File(rootProject.projectDir, "RoaringBitmap/style/roaring_google_checks.xml")
-                isIgnoreFailures = false
-                isShowViolations = true
-            }
+    // You can format the codebase with `./gradlew spotlessApply`
+    // You check the codebase format with `./gradlew spotlessCheck`
+    spotless {
+        // Ratchetting from master means we check/apply only files which are changed relatively to master
+        // This is especially useful for performance, given the whole codebase has been formatted with Spotless.
+        ratchetFrom("origin/master")
 
-            // don't checkstyle source
-            named<Checkstyle>("checkstyleTest") {
-                exclude("**/**")
+        java {
+            // Disbale javadoc formatting as most the javacode do not follow HTML syntax.
+            googleJavaFormat().reflowLongStrings().formatJavadoc(false)
+            formatAnnotations()
+
+            importOrder("\\#", "org.roaringbitmap", "", "java", "javax")
+            removeUnusedImports()
+
+            trimTrailingWhitespace()
+            endWithNewline()
+
+            // https://github.com/opensearch-project/opensearch-java/commit/2d6d5f86a8db9c7c9e7b8d0f54df97246f7b7d7e
+            // https://github.com/diffplug/spotless/issues/649
+            val wildcardImportRegex = Regex("""^import\s+(?:static\s+)?[^*\s]+\.\*;$""", RegexOption.MULTILINE)
+            custom("Refuse wildcard imports") { contents ->
+                // Wildcard imports can't be resolved by spotless itself.
+                // This will require the developer themselves to adhere to best practices.
+                val wildcardImports = wildcardImportRegex.findAll(contents)
+                if (wildcardImports.any()) {
+                    var msg = """
+                    Please replace the following wildcard imports with explicit imports ('spotlessApply' cannot resolve this issue):
+                """.trimIndent()
+                    wildcardImports.forEach {
+                        msg += "\n\t- ${it.value}"
+                    }
+                    msg += "\n"
+                    throw AssertionError(msg)
+                }
+                contents
             }
         }
     }
 }
 
-subprojects.filter { listOf("RoaringBitmap", "shims", "bsi").contains(it.name) }.forEach { project ->
+subprojects.filter { listOf("roaringbitmap", "bsi").contains(it.name) }.forEach { project ->
     project.run {
         apply(plugin = "maven-publish")
-        apply(plugin = "signing")
-
         configure<JavaPluginExtension> {
             withSourcesJar()
             withJavadocJar()
@@ -135,46 +158,28 @@ subprojects.filter { listOf("RoaringBitmap", "shims", "bsi").contains(it.name) }
                     url = project.buildDir.toPath().resolve("repos").resolve("localDebug").toUri()
                 }
             }
-        }
 
-        // don't barf for devs without signing set up
-        if (project.hasProperty("signing.keyId")) {
-            configure<SigningExtension> {
-                sign(project.extensions.getByType<PublishingExtension>().publications["sonatype"])
+            // ./gradlew publishSonatypePublicationToGitHubPackagesRepository
+            repositories {
+                maven {
+                    name = "GitHubPackages"
+                    url = uri("https://maven.pkg.github.com/RoaringBitmap/RoaringBitmap")
+                    credentials {
+                        username = System.getenv("GITHUB_ACTOR")
+                        password = System.getenv("GITHUB_TOKEN")
+                    }
+                }
             }
+
         }
 
-        // releasing should publish
-        rootProject.tasks.afterReleaseBuild {
-            dependsOn(provider { project.tasks.named("publishToSonatype") })
-        }
-    }
-}
 
-tasks {
-    register("build") {
-        // dummy build task to appease release plugin
     }
 }
 
 release {
-    // for some odd reason, we used to have our tags be of the form RoaringBitmap-0.1.0
+    // for some odd reason, we used to have our tags be of the form roaringbitmap-0.1.0
     // instead of just 0.1.0 or v0.1.0.
     tagTemplate = "\$version"
 }
-
-nexusPublishing {
-    repositories {
-        sonatype {
-            // sonatypeUsername and sonatypePassword properties are used automatically
-            // id found via clicking the desired profile in the web ui and noting the url fragment
-            stagingProfileId.set("144dd9b55bb0c2")
-            nexusUrl.set(uri("https://s01.oss.sonatype.org/service/local/"))
-            snapshotRepositoryUrl.set(uri("https://s01.oss.sonatype.org/content/repositories/snapshots/"))
-        }
-    }
-    // these are not strictly required. The default timeouts are set to 1 minute. But Sonatype can be really slow.
-    // If you get the error "java.net.SocketTimeoutException: timeout", these lines will help.
-    connectTimeout.set(Duration.ofMinutes(3))
-    clientTimeout.set(Duration.ofMinutes(3))
-}
+	
